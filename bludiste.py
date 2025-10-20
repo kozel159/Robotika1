@@ -3,25 +3,24 @@ import brian.sensors as sensors
 from collections import deque
 import time
 
-ultrasonic = sensors.EV3.UltrasonicSensorEV3(sensors.SensorPort.S2)
-motor_b = motors.EV3LargeMotor(motors.MotorPort.B)  # scanner
+ultrasonic = sensors.EV3.UltrasonicSensorEV3(sensors.SensorPort.S1)
+ultrasonic.wait_until_ready()
+motor_b = motors.EV3LargeMotor(motors.MotorPort.B)
 motor_b.wait_until_ready()
-motor_a = motors.EV3LargeMotor(motors.MotorPort.A)  # left wheel
+motor_a = motors.EV3LargeMotor(motors.MotorPort.A) 
 motor_a.wait_until_ready()
-motor_d = motors.EV3LargeMotor(motors.MotorPort.D)  # right wheel
+motor_d = motors.EV3LargeMotor(motors.MotorPort.D) 
 motor_d.wait_until_ready()
 
-# ===== Maze state =====
-maze = {(0, 0): "visited"}  # start tile
+maze = {(0, 0): "visited"}
 x, y = 0, 0
 facing = "N"
 
-# ===== Movement tuning =====
-FORWARD_ROT = 1440 
-TURN_ROT = 180     
-SPEED = 800
+FORWARD_ROT = 400
+TURN_ROT = 100    
+SPEED = 300
+SCAN_SPEED = 150
 
-# ===== Helper functions =====
 def direction_to_delta(direction):
     return {"N": (0, 1), "E": (1, 0), "S": (0, -1), "W": (-1, 0)}[direction]
 
@@ -44,42 +43,45 @@ def scan_surroundings(scan_motor, distance_sensor, facing, x, y, maze):
     for local_dir, global_dir in dir_map.items():
         rotation_angle = 0 if local_dir == "front" else (-90 if local_dir == "right" else 90)
         if rotation_angle != 0:
-            scan_motor.rotate_by_angle(rotation_angle, speed=300)
+            scan_motor.rotate_by_angle(rotation_angle, SCAN_SPEED)
             time.sleep(0.2)
         distance = distance_sensor.distance_mm()
-        is_wall = distance < 100
+        is_wall = distance < 200
         dx, dy = direction_to_delta(global_dir)
         nx, ny = x + dx, y + dy
         maze[(nx, ny)] = "wall" if is_wall else maze.get((nx, ny), "free")
         if rotation_angle != 0:
-            scan_motor.rotate_by_angle(-rotation_angle, speed=300)
+            scan_motor.rotate_by_angle(-rotation_angle, SCAN_SPEED)
             time.sleep(0.2)
 
 def turn_left():
     global facing
-    motor_a.rotate_by_angle(-TURN_ROT, SPEED, False)
-    motor_d.rotate_by_angle(TURN_ROT, SPEED)
+    motor_a.rotate_by_angle(-TURN_ROT, SPEED/3, False)
+    motor_d.rotate_by_angle(TURN_ROT, SPEED/3)
     facing = {"N": "W", "W": "S", "S": "E", "E": "N"}[facing]
+    print("turning left")
     time.sleep(0.2)
 
 def turn_right():
     global facing
-    motor_a.rotate_by_angle(TURN_ROT, SPEED, False)
-    motor_d.rotate_by_angle(-TURN_ROT, SPEED)
+    motor_a.rotate_by_angle(TURN_ROT, SPEED/3, False)
+    motor_d.rotate_by_angle(-TURN_ROT, SPEED/3)
     facing = {"N": "E", "E": "S", "S": "W", "W": "N"}[facing]
+    print("turning right")
     time.sleep(0.2)
 
 def turn_around():
     global facing
-    motor_a.rotate_by_angle(2 * TURN_ROT, SPEED, False)
-    motor_d.rotate_by_angle(-2 * TURN_ROT, SPEED)
+    motor_a.rotate_by_angle(2 * TURN_ROT, SPEED/3, False)
+    motor_d.rotate_by_angle(-2 * TURN_ROT, SPEED/3)
     facing = {"N": "S", "S": "N", "E": "W", "W": "E"}[facing]
+    print("turn around")
     time.sleep(0.2)
 
 def move_forward():
     global x, y
-    motor_a.rotate_by_angle(FORWARD_ROT, SPEED, False)
-    motor_d.rotate_by_angle(FORWARD_ROT, SPEED)
+    motor_a.rotate_by_angle(-FORWARD_ROT, SPEED, False)
+    motor_d.rotate_by_angle(-FORWARD_ROT, SPEED)
     dx, dy = direction_to_delta(facing)
     x += dx
     y += dy
@@ -123,9 +125,9 @@ def bfs_shortest_path(start, goal):
                 visited.add(neighbor)
     return []
 
-def find_nearest_unvisited(start):
-    queue = deque([start])
-    visited = {start}
+def find_nearest_unvisited(x, y):
+    queue = deque([x, y])
+    visited = {(x, y)}
     while queue:
         pos = queue.popleft()
         for dx, dy in [(0,1), (1,0), (0,-1), (-1,0)]:
@@ -140,7 +142,6 @@ def find_nearest_unvisited(start):
                 visited.add((nx, ny))
     return None
 
-# ===== Main loop =====
 while True:
     if should_scan(x, y, maze):
         scan_surroundings(motor_b, ultrasonic, facing, x, y, maze)
@@ -148,7 +149,6 @@ while True:
     unvisited = get_unvisited_neighbors()
 
     if unvisited:
-        # Move to the nearest in front>right>left order
         priorities = [facing,
                       {"N": "E", "E": "S", "S": "W", "W": "N"}[facing],
                       {"N": "W", "W": "S", "S": "E", "E": "N"}[facing]]
@@ -164,7 +164,6 @@ while True:
             move_forward()
 
     else:
-        # No local unvisited tiles → backtrack using BFS
         target = find_nearest_unvisited((x, y))
         if not target:
             print("Maze fully explored!")
@@ -175,7 +174,6 @@ while True:
             print("No path found to", target)
             break
 
-        # Physically drive tile by tile along the BFS path
         for step in path:
             turn_toward(step)
             move_forward()
